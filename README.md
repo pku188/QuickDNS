@@ -1,6 +1,6 @@
 # QuickDNS
 
-Quickly resolve DNS records of specified domain. Written in native Ruby. \
+Quickly resolves DNS records of specified domain. Written in native Ruby. \
 Does not use any external Gems.
 
 \
@@ -8,9 +8,13 @@ Does not use any external Gems.
 Add the script to your executable PATH.
 
 \
+**Configuration:** \
+It is recommended to set a free ipapi.is API key in the API_KEY variable in order for the script to provide more detailed IP lookup.
+
+\
 **Usage:**
 
 * `dns.rb domain.com` - displays DNS records of given domain for default DNS resolvers (8.8.8.8, 1.1.1.1)
-* `dns.rb domain.com @resolver` - displays DNS zone of given domain for given @resolver
+* `dns.rb domain.com @resolver` - displays DNS zone of given domain for specified @resolver
 * `dns.rb IP` - displays reverse DNS with additional information regarding given IP address (uses ipapi.is API)
 

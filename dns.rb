@@ -17,6 +17,10 @@ require 'ipaddr'
 require 'socket'
 
 class QuickDNS
+  # Add your free ipapi.is API key to receive full IP lookup response.
+  API_KEY = ''.freeze
+
+  # Additional config
   RESOLVERS = %w[8.8.8.8 1.1.1.1].freeze
   MAIN_RESOLVER = '8.8.8.8'
   TIMEOUT = 5
@@ -35,31 +39,36 @@ class QuickDNS
     @main_resolver = MAIN_RESOLVER
   end
 
-  def resolver_reachable?(ip, test_domain = "one.one.one.one")
+  def resolver_reachable?(ip, test_domain = 'one.one.one.one')
     begin
-      Timeout::timeout(CONNECTIVITY_TIMEOUT) do
+      Timeout.timeout(CONNECTIVITY_TIMEOUT) do
         resolver = Resolv::DNS.new(nameserver: ip)
         resolver.timeouts = CONNECTIVITY_TIMEOUT
         resolver.getaddress(test_domain)
       end
       true
-    rescue Timeout::Error, Resolv::ResolvError, Resolv::ResolvTimeout, SocketError, Errno::EHOSTUNREACH, Errno::ENETUNREACH
+    rescue Timeout::Error,
+           Resolv::ResolvError,
+           Resolv::ResolvTimeout,
+           SocketError,
+           Errno::EHOSTUNREACH,
+           Errno::ENETUNREACH
       false
     end
   end
 
-  def parse_domain(input)
+  def parse_input(input)
     return nil if input.nil? || input.empty?
 
     domain = input.downcase
-    domain = domain.sub(/^[a-z]+:\/\//, '')  # Remove protocol
-    domain = domain.sub(/^www\./, '')        # Remove www
-    domain = domain.sub(/^.*@/, '')          # Remove user info
-    domain = domain.sub(/\/.*$/, '')         # Remove path
-    domain = domain.strip                    # Trim
+    domain = domain.sub(%r{^[a-z]+://}, '') # Remove protocol
+    domain = domain.sub(/^www\./, '') # Remove www
+    domain = domain.sub(/^.*@/, '') # Remove user info
+    domain = domain.sub(%r{/.*$}, '') # Remove path
+    domain = domain.strip # Trim
 
-    if domain.match?(/[^a-zA-Z0-9.:-]/)
-      puts "Invalid characters in domain"
+    if domain.match?(/[^a-zA-Z0-9.:_-]/)
+      puts 'Invalid characters in domain'
       exit 1
     end
 
@@ -79,29 +88,47 @@ class QuickDNS
     begin
       resolver = create_resolver(resolver_ip)
       if recursive
-        records = case type.upcase
-                  when 'A'
-                    resolver.getaddresses(query).select { |addr| addr.is_a?(Resolv::IPv4) }.map(&:to_s)
-                  when 'AAAA'
-                    resolver.getaddresses(query).select { |addr| addr.is_a?(Resolv::IPv6) }.map(&:to_s)
-                  when 'MX'
-                    resolver.getresources(query, Resolv::DNS::Resource::IN::MX).map { |r| [r.preference, r.exchange.to_s] }
-                  when 'TXT'
-                    resolver.getresources(query, Resolv::DNS::Resource::IN::TXT).map { |r| r.strings.join('') }
-                  when 'NS'
-                    resolver.getresources(query, Resolv::DNS::Resource::IN::NS).map { |r| r.name.to_s }
-                  when 'CNAME'
-                    resolver.getresources(query, Resolv::DNS::Resource::IN::CNAME).map { |r| r.name.to_s }
-                  when 'SOA'
-                    soa = resolver.getresources(query, Resolv::DNS::Resource::IN::SOA).first
-                    if soa
-                      ["#{soa.mname} #{soa.rname} #{soa.serial} #{soa.refresh} #{soa.retry} #{soa.expire} #{soa.minimum}"]
-                    else
-                      []
-                    end
-                  else
-                    []
-                  end
+        records =
+          case type.upcase
+          when 'A'
+            resolver
+              .getaddresses(query)
+              .select { |addr| addr.is_a?(Resolv::IPv4) }
+              .map(&:to_s)
+          when 'AAAA'
+            resolver
+              .getaddresses(query)
+              .select { |addr| addr.is_a?(Resolv::IPv6) }
+              .map(&:to_s)
+          when 'MX'
+            resolver
+              .getresources(query, Resolv::DNS::Resource::IN::MX)
+              .map { |r| [r.preference, r.exchange.to_s] }
+          when 'TXT'
+            resolver
+              .getresources(query, Resolv::DNS::Resource::IN::TXT)
+              .map { |r| r.strings.join('') }
+          when 'NS'
+            resolver
+              .getresources(query, Resolv::DNS::Resource::IN::NS)
+              .map { |r| r.name.to_s }
+          when 'CNAME'
+            resolver
+              .getresources(query, Resolv::DNS::Resource::IN::CNAME)
+              .map { |r| r.name.to_s }
+          when 'SOA'
+            soa =
+              resolver.getresources(query, Resolv::DNS::Resource::IN::SOA).first
+            if soa
+              [
+                "#{soa.mname} #{soa.rname} #{soa.serial} #{soa.refresh} #{soa.retry} #{soa.expire} #{soa.minimum}"
+              ]
+            else
+              []
+            end
+          else
+            []
+          end
       else
         # Get authoritative DNS, cover cases like sub.domain.co.uk
         tld_arr = %w[co com org info net edu gov]
@@ -114,7 +141,10 @@ class QuickDNS
           else
             query
           end
-        records = resolver.getresources(query, Resolv::DNS::Resource::IN::NS).map { |r| r.name.to_s }
+        records =
+          resolver
+            .getresources(query, Resolv::DNS::Resource::IN::NS)
+            .map { |r| r.name.to_s }
       end
 
       @dns_cache[cache_key] = records
@@ -134,10 +164,37 @@ class QuickDNS
       result = resolver.getname(ip)
       @reverse_cache[ip] = result.to_s
     rescue => e
-      @reverse_cache[ip] = ip  # Return IP if no reverse DNS
+      @reverse_cache[ip] = ip # Return IP if no reverse DNS
     end
 
     @reverse_cache[ip]
+  end
+
+  def ipapi_uri(ip)
+    api_key = API_KEY.to_s.strip
+    params = { q: ip }
+    params[:key] = api_key unless api_key.empty?
+
+    uri = URI('https://api.ipapi.is/')
+    uri.query = URI.encode_www_form(params)
+    uri
+  end
+
+  def normalize_ipapi_response(data)
+    # Keyed replies already use the nested structure consumed below. Map only
+    # matching fields from the trimmed reply; ignore fields this script does not output.
+    if data.key?('company') || data.key?('asn') || data.key?('location')
+      return data
+    end
+
+    normalized = data.dup
+    normalized['_ipapi_mode'] = 'trimmed'
+    normalized['company'] = { 'name' => data['company_name'] } if data[
+      'company_name'
+    ]
+    normalized['asn'] = { 'org' => data['asn_org'] } if data['asn_org']
+    normalized['location'] = { 'country_code' => data['cc'] } if data['cc']
+    normalized
   end
 
   def get_ipinfo(ip)
@@ -145,15 +202,13 @@ class QuickDNS
     return @ipinfo_cache[ip] if @ipinfo_cache.key?(ip)
 
     begin
-      uri = URI("https://api.ipapi.is/?q=#{ip}")
+      uri = ipapi_uri(ip)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
       http.read_timeout = TIMEOUT
       http.open_timeout = TIMEOUT
       ca_file = '/etc/ssl/certs/ca-certificates.crt'
-      if ::File.file?(ca_file)
-        http.ca_file = ca_file
-      end
+      http.ca_file = ca_file if ::File.file?(ca_file)
       response = http.request(Net::HTTP::Get.new(uri))
       @ipinfo_cache[ip] = response.code == '200' ? response.body : ''
     rescue => e
@@ -175,7 +230,7 @@ class QuickDNS
   def valid_domain?(string)
     return false if string.nil? || !string.include?('.')
     return true if ip_address?(string)
-    string.match?(/^[a-zA-Z0-9.-]+$/)
+    string.match?(/^[a-zA-Z0-9._-]+$/)
   end
 
   def process_ip(ip)
@@ -193,10 +248,12 @@ class QuickDNS
     ipinfo = get_ipinfo(ip)
     if !ipinfo.empty?
       begin
-        data = JSON.parse(ipinfo)
+        data = normalize_ipapi_response(JSON.parse(ipinfo))
 
         # Route
-        puts "route: #{data['asn']['route']}" if data['asn'] && data['asn']['route']
+        if data['asn'] && data['asn']['route']
+          puts "route: #{data['asn']['route']}"
+        end
 
         # Extract fields for comparison
         comp_name = data.dig('company', 'name')
@@ -215,61 +272,95 @@ class QuickDNS
         end
 
         # Datacenter Line (Output only if differs from company)
-        if (dc_name && ![comp_name, comp_domain].include?(dc_name)) || (dc_domain && ![comp_name, comp_domain].include?(dc_domain))
+        if (dc_name && ![comp_name, comp_domain].include?(dc_name)) ||
+             (dc_domain && ![comp_name, comp_domain].include?(dc_domain))
           dc_out = [dc_name, dc_domain].compact
           puts "datacenter: #{dc_out.join(', ')}" if dc_out.any?
         end
 
         # ASN Line (Output only if differs from company/DC)
-        if (asn_org && ![comp_name, comp_domain, dc_name, dc_domain].include?(asn_org)) || (asn_domain && ![comp_name, comp_domain, dc_name, dc_domain].include?(asn_domain))
+        if (
+             asn_org &&
+               ![comp_name, comp_domain, dc_name, dc_domain].include?(asn_org)
+           ) ||
+             (
+               asn_domain &&
+                 ![comp_name, comp_domain, dc_name, dc_domain].include?(
+                   asn_domain
+                 )
+             )
           asn_out = [asn_org, asn_domain].compact
           puts "asn: #{asn_out.join(', ')}" if asn_out.any?
         end
 
         # Location info
         if data['location']
-          location_parts = [
-            data['location']['zip'],
-            data['location']['city'],
-            data['location']['state'],
-            data['location']['country'],
-            data['location']['country_code']
-          ].compact
-          puts "zip: #{location_parts.join(', ')}" unless location_parts.empty?
+          if data['_ipapi_mode'] == 'trimmed'
+            cc = data['location']['country_code']
+            puts "cc: #{cc}" if cc
+          else
+            location_parts = [
+              data['location']['zip'],
+              data['location']['city'],
+              data['location']['state'],
+              data['location']['country'],
+              data['location']['country_code']
+            ].compact
+            unless location_parts.empty?
+              puts "zip: #{location_parts.join(', ')}"
+            end
+          end
         end
 
         # Type
         type_arr = []
-        company_type, asn_type = data.dig('company', 'type'), data.dig('asn', 'type')
+        company_type, asn_type =
+          data.dig('company', 'type'),
+          data.dig('asn', 'type')
         type_arr << company_type if company_type
         type_arr << "#{asn_type} (asn)" if asn_type && asn_type != company_type
         puts "type: #{type_arr.join(', ')}" if type_arr.any?
 
         # Boolean flags
         keys = data.select { |k, v| v == true }.keys
+
+        # Rich replies can return is_crawler as a crawler name rather than true/false.
+        crawler = data['is_crawler']
+        if !crawler.nil? && crawler != false && crawler != true
+          keys << 'is_crawler'
+        end
+
         if keys.any?
-          formatted_flags = keys.map do |key|
-            if key == 'is_vpn'
-              vpn_service = data.dig('vpn', 'service')
-              vpn_service ? "#{key} (#{vpn_service})" : key
-            else
-              key
+          formatted_flags =
+            keys.map do |key|
+              if key == 'is_vpn'
+                vpn_service = data.dig('vpn', 'service')
+                vpn_service ? "#{key} (#{vpn_service})" : key
+              elsif key == 'is_crawler'
+                crawler == true ? key : "#{key} (#{crawler})"
+              else
+                key
+              end
             end
-          end
           puts "flags: #{formatted_flags.sort.join(', ')}"
         end
 
         # Abuser scores (company/ASN)
         abuser_scores = []
-        abuser_scores << data['company']['abuser_score'] if data['company'] && data['company']['abuser_score']
-        abuser_scores << data['asn']['abuser_score'] if data['asn'] && data['asn']['abuser_score']
-        puts "abuser_score: #{abuser_scores.join(', ')}" unless abuser_scores.empty?
-
+        if data['company'] && data['company']['abuser_score']
+          abuser_scores << data['company']['abuser_score']
+        end
+        if data['asn'] && data['asn']['abuser_score']
+          abuser_scores << data['asn']['abuser_score']
+        end
+        unless abuser_scores.empty?
+          puts "abuser_score: #{abuser_scores.join(', ')}"
+        end
       rescue JSON::ParserError => e
         puts "Error parsing IP info JSON: #{e.message}"
       end
     else
-      puts "Error: Failed to fetch IP info"
+      puts 'Error: Failed to fetch IP info'
     end
   end
 
@@ -279,54 +370,60 @@ class QuickDNS
 
       # A records
       a_records = get_dns_records(domain, 'A', resolver)
-      a_records.sort_by do |ip|
-        begin
-          IPAddr.new(ip)
-        rescue IPAddr::InvalidAddressError
-          IPAddr.new("255.255.255.255")
+      a_records
+        .sort_by do |ip|
+          begin
+            IPAddr.new(ip)
+          rescue IPAddr::InvalidAddressError
+            IPAddr.new('255.255.255.255')
+          end
         end
-      end.each do |ip|
-        reverse = get_reverse_dns(ip)
-        puts "A:   #{ip}  -->  #{YELLOW}#{reverse}#{NC}"
-      end
+        .each do |ip|
+          reverse = get_reverse_dns(ip)
+          puts "A:   #{ip}  -->  #{YELLOW}#{reverse}#{NC}"
+        end
 
       # www records
       www_records = get_dns_records("www.#{domain}", 'A', resolver)
-      www_records.sort_by do |ip|
-        begin
-          IPAddr.new(ip)
-        rescue IPAddr::InvalidAddressError
-          IPAddr.new("255.255.255.255")
+      www_records
+        .sort_by do |ip|
+          begin
+            IPAddr.new(ip)
+          rescue IPAddr::InvalidAddressError
+            IPAddr.new('255.255.255.255')
+          end
         end
-      end.each do |ip|
-        reverse = get_reverse_dns(ip)
-        puts "www: #{ip}  -->  #{YELLOW}#{reverse}#{NC}"
-      end
+        .each do |ip|
+          reverse = get_reverse_dns(ip)
+          puts "www: #{ip}  -->  #{YELLOW}#{reverse}#{NC}"
+        end
 
       # MX records
       mx_records = get_dns_records(domain, 'MX', resolver)
-      mx_records.sort_by { |preference, exchange| [preference, exchange] }.each do |preference, exchange|
-        # Get A record for MX host
-        mx_a_records = get_dns_records(exchange, 'A', resolver)
-        if mx_a_records.empty?
-          # Fallback to CNAME
-          cname_records = get_dns_records(exchange, 'CNAME', resolver)
-          mx_a_records = cname_records
-        end
-
-        if mx_a_records.any?
-          mx_a_records.each do |ip|
-            reverse = get_reverse_dns(ip)
-            if reverse == ip
-              puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}#{reverse}#{NC}"
-            else
-              puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}#{reverse}#{NC} [#{ip}]"
-            end
+      mx_records
+        .sort_by { |preference, exchange| [preference, exchange] }
+        .each do |preference, exchange|
+          # Get A record for MX host
+          mx_a_records = get_dns_records(exchange, 'A', resolver)
+          if mx_a_records.empty?
+            # Fallback to CNAME
+            cname_records = get_dns_records(exchange, 'CNAME', resolver)
+            mx_a_records = cname_records
           end
-        else
-          puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}No A record#{NC}"
+
+          if mx_a_records.any?
+            mx_a_records.each do |ip|
+              reverse = get_reverse_dns(ip)
+              if reverse == ip
+                puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}#{reverse}#{NC}"
+              else
+                puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}#{reverse}#{NC} [#{ip}]"
+              end
+            end
+          else
+            puts "MX:  #{exchange} [#{preference}]  -->  #{YELLOW}No A record#{NC}"
+          end
         end
-      end
     end
 
     # TXT records
@@ -346,9 +443,7 @@ class QuickDNS
       ns_records.sort.each do |ns|
         a_records = get_dns_records(ns, 'A', @main_resolver)
         if a_records.any?
-          a_records.each do |ip|
-            puts "#{ns} --> #{YELLOW}#{ip}#{NC}"
-          end
+          a_records.each { |ip| puts "#{ns} --> #{YELLOW}#{ip}#{NC}" }
         else
           puts "#{ns}"
         end
@@ -382,7 +477,7 @@ class QuickDNS
       end
     end
 
-    domain = parse_domain(target_input)
+    domain = parse_input(target_input)
 
     if domain.nil?
       show_usage
@@ -415,21 +510,17 @@ class QuickDNS
   end
 
   def show_usage
-    puts "QuickDNS - quickly resolve DNS records of specified domain"
-    puts "Usage: dns [domain.com | IP] [@custom_resolver]"
+    puts 'QuickDNS - quickly resolve DNS records of specified domain'
+    puts 'Usage: dns [domain.com | IP] [@custom_resolver]'
     puts "\nExamples:"
-    puts "  dns example.com"
-    puts "  dns 1.1.1.1"
-    puts "  dns example.com @9.9.9.9"
+    puts '  dns example.com'
+    puts '  dns 1.1.1.1'
+    puts '  dns example.com @9.9.9.9'
     exit 1
   end
 end
 
 # Main execution
 if __FILE__ == $0
-  if ARGV.empty?
-    QuickDNS.new.show_usage
-  else
-    QuickDNS.new.run(ARGV)
-  end
+  ARGV.empty? ? QuickDNS.new.show_usage : QuickDNS.new.run(ARGV)
 end
